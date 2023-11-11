@@ -1,0 +1,106 @@
+<drac2>  #hunt
+pref = ctx.prefix
+null = ''
+nl = '\n'
+al = ctx.alias
+cmd = pref+al
+curr_time = time()
+
+using(
+	calendar="74a21a79-bc4c-4b03-9b21-a16e2b591a89",
+	hunt="09fcbc10-6dc6-4918-825d-9aa20fdced3c"
+)
+
+biomes_list = [
+	'Arctic',
+	'Coastal',
+	'Swamp',
+	'Desert',
+	'Feywild',
+	'Hill',
+	'Forest',
+	'Grassland',
+	'Mountain',
+	'Underdark',
+	'Haunted',
+	'Underwater',
+	'Urban'
+]
+difficulty_list = ['easy', 'medium', 'hard', 'deadly']
+
+eg_cmd = f'{cmd} `{biomes_list[0]}`'
+
+inp = "&*&".lower().replace('"', '')
+inp1 = "&1&".lower().replace('"', '')
+inp2 = "&2&".lower().replace('"', '')
+inp1_title = "&1&".title().replace('"', '')
+
+c = combat()
+
+help_text = f'__**Usage**__:\n`{cmd} <location> [difficulty]`\n\n __**Availabe locations**__:\n{nl.join(biomes_list)}\n\n__**Available difficulty levels**__:\n{nl.join(difficulty_list)}\n\n:warning: Selecting a difficulty level is optional. If not specified, it will be chosen randomly.'
+if inp in "help?":
+	title = f'{name} needs help hunting!'
+	desc = help_text
+elif inp1_title not in biomes_list and inp1 not in 'endcollect':
+	title = f'Please check the location you\'ve entered!'
+	desc = f'It must be one of the following:\n\n{nl.join(list(biomes_list))}\n\nFor eg:\n' + eg_cmd
+elif inp1_title in biomes_list:
+	monster_yaml1 = get_gvar("c9a5d4db-0fe4-4934-b417-405e92d5d88f")
+	monster_yaml2 = get_gvar("7b2f041a-e187-4f4b-b484-c323afd3cf83")
+
+	monster_data = load_yaml(monster_yaml1+monster_yaml2)
+
+	is_daytime = calendar.is_daytime(curr_time)
+
+	input_difficulty = inp2.title() if inp2 in difficulty_list else None
+	difficulty_roll, chosen_difficulty, xp_value = hunt.determine_challenge(level, input_difficulty)
+
+	suitable_monsters = hunt.find_monsters(monster_data, inp1_title, level, xp_value, is_daytime)
+	if not suitable_monsters:
+		title = f'No monsters found in this biome.'
+		desc = f'Please try again later.'
+		return (f"""embed -title "{title}" -desc "{desc}" -thumb {image} -color {color} -footer '!{al} help | made by alpha983'""")
+
+
+	title, desc = hunt.format_encounter_details(suitable_monsters, inp1_title, difficulty_roll, chosen_difficulty, xp_value)
+
+	# Step 1: Aggregate Monster Quantities
+	monster_quantities = {}
+	for monster in suitable_monsters:
+		monst = monster[0]  # The name of the monster
+		if monst in monster_quantities:
+			monster_quantities[monst] += 1
+		else:
+			monster_quantities[monst] = 1
+
+	# Step 2: Generate Commands
+	monst_list = []
+	for monst, qty in monster_quantities.items():
+		madd_cmd = f'{pref}i madd ' + '\"' + f'{monst}' + '\"' + f' -n {qty}'
+		monst_list.append(madd_cmd)
+	combatants = list(c.combatants) if c else []
+	l1 = f'embed -title "{title}" -desc "'+desc+f'" -thumb {image} -color {color} -footer "!{al} help | made by alpha983"'
+	auto_helper_title = f"Recommended Action: Use `{pref}auto` for Monster AI"
+	auto_helper_desc = f"""`{pref}auto`
+
+If you haven\'t enabled `{pref}auto` yet, click the below link to visit the workshop page:
+[🤖 Auto Monster AI](https://avrae.io/dashboard/workshop/617805d1137cd863517bc42c)
+(Please ignore if a Game Master is available to run combat)
+
+:warning: IMPORTANT: After defeating all monsters, use `{cmd} end` to automatically add the XP you've earned from the combat."""
+	l4 = f'!embed -title "{auto_helper_title}" -desc "'+auto_helper_desc+f'" -color {color} -footer "!{al} help | made by alpha983"'
+	if c:
+		l2 = f'{pref}i join' if not c.me else ''
+		l3 = ''
+	else:
+		l2 = f'{pref}i begin'
+		l3 = f'{pref}i join'
+	command_list = [l1, l2, l3] + monst_list + [l4]
+	command = f"""multiline{nl}"""
+	command += nl.join(command_list)
+	return command
+elif inp1_title in 'Endcollect':
+	title, desc = hunt.conclude_combat(c)
+
+return (f"""embed -title "{title}" -desc "{desc}" -thumb {image} -color {color} -footer '!{al} help | made by alpha983'""")
+</drac2>
