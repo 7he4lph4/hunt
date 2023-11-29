@@ -6,12 +6,22 @@ using(
 
 char = character()
 name = char.name
+nl = '\n'
 pref = ctx.prefix
 al = ctx.alias
 cmd = pref+al
 
 # Find suitable monsters for the hunt
-def find_monsters(data, biome, player_level, max_xp, is_daytime):
+def chunk_monsters_by_xp(monsters, data):
+    chunks = {}
+    for monster in monsters:
+        xp = monster[data['header'].index('XP')]
+        if xp not in chunks:
+            chunks[xp] = []
+        chunks[xp].append(monster)
+    return chunks
+
+def find_monsters(data, biome, player_level, max_xp, is_daytime, max_monsters):
     monsters_in_biome = [
         monster for monster in data['data']
         if (biome in monster[data['header'].index('Biome1')] or biome in monster[data['header'].index('Biome2')]) and 
@@ -22,28 +32,36 @@ def find_monsters(data, biome, player_level, max_xp, is_daytime):
     if not monsters_in_biome:
         return []
 
-    # Sort monsters by XP in descending order to maximize the chance of reaching max_xp.
-    monsters_in_biome.sort(key=lambda m: m[data['header'].index('XP')], reverse=True)
+    # Check for any monsters that can single-handedly meet the max_xp
+    exact_match_monsters = [monster for monster in monsters_in_biome if monster[data['header'].index('XP')] == max_xp]
 
+    # 50% chance to select a single monster that meets the max_xp
+    if exact_match_monsters and randchoice([True, False]):
+        return [randchoice(exact_match_monsters)]
+
+    chunks = chunk_monsters_by_xp(monsters_in_biome, data)
+    
     suitable_monsters = []
     total_xp = 0
 
-    while total_xp < max_xp:
-        # Create a pool of monsters that won't exceed the max_xp if chosen.
-        available_monsters = [m for m in monsters_in_biome if m[data['header'].index('XP')] + total_xp <= max_xp]
+    # Manually sorting the XP keys in descending order
+    xp_values = list(chunks.keys())
+    for i in range(len(xp_values)):
+        for j in range(i + 1, len(xp_values)):
+            if xp_values[i] < xp_values[j]:
+                xp_values[i], xp_values[j] = xp_values[j], xp_values[i]
 
-        if not available_monsters:
-            break  # Break out if there are no monsters that can fit into the remaining XP budget.
+    for xp in xp_values:
+        while chunks[xp] and total_xp + xp <= max_xp and len(suitable_monsters) < max_monsters:
+            selected_monster = randchoice(chunks[xp])
+            suitable_monsters.append(selected_monster)
+            total_xp += selected_monster[data['header'].index('XP')]
+            chunks[xp].remove(selected_monster)  # Remove the selected monster from the chunk
 
-        # Randomly select a monster from the available monsters.
-        current_monster = randchoice(available_monsters)
-        suitable_monsters.append(current_monster)
-
-        # Update the total XP with the added monster's XP.
-        total_xp += current_monster[data['header'].index('XP')]
+            if total_xp >= max_xp or len(suitable_monsters) >= max_monsters:
+                return suitable_monsters
 
     return suitable_monsters
-
 
 def get_emoji_representation(quantity, whole_emoji, half_emoji):
     # Calculate the whole and fractional part of the quantity
@@ -63,11 +81,12 @@ def get_emoji_representation(quantity, whole_emoji, half_emoji):
 
 
 
-def set_loot_cvar(xp, biome):
+def set_loot_cvar(xp, biome, player_levels_dict):
     # Prepare the data to store
     loot_data = {
         "xp": xp,
-        "biome": biome
+        "biome": biome,
+        "player_levels_dict": player_levels_dict
     }
 
     # Convert the data to a JSON string
@@ -110,7 +129,7 @@ def get_behavior(yaml_data, biome, time_period, creature_type):
     return behavior
 
 
-def format_encounter_details(suitable_monsters, biome, difficulty_roll, chosen_difficulty, xp_value):
+def format_encounter_details(suitable_monsters, biome, difficulty_roll, chosen_difficulty, xp_value, player_levels_dict):
     if not suitable_monsters:
         title = "No suitable monsters found for the encounter." 
         return title, ""
@@ -206,10 +225,10 @@ def format_encounter_details(suitable_monsters, biome, difficulty_roll, chosen_d
 
 
     # Store this information in the character's cvar
-    set_loot_cvar(total_monster_xp, biome)
+    set_loot_cvar(total_monster_xp, biome, player_levels_dict)
 
     # Difficulty and XP details
-    difficulty_details = f"{difficulty_roll} - Challenge: {chosen_difficulty} (XP: {xp_value})\n" \
+    difficulty_details = f"No. of Players: {len(player_levels_dict)}\n{difficulty_roll} - Challenge: {chosen_difficulty} (XP: {xp_value})\n" \
                          f"Encounter XP: {total_monster_xp}/{xp_value}"
 
     # Constructing the final message, escaping double quotes
@@ -232,7 +251,7 @@ def conclude_combat(combat):
     # Check if all non-player combatants are dead
     all_monsters_dead = True
     for combatant in combat.combatants:
-        if combatant.type == "combatant" and combatant.hp > 0 and combatant.creature_type is not None:
+        if combatant.type == "combatant" and combatant.hp > 0 and combatant.creature_type is not None and combatant.monster_name is not None:
             all_monsters_dead = False
             break  # If any monster is still alive, we exit the check
 
@@ -245,19 +264,37 @@ def conclude_combat(combat):
             magical_materials = loot_data.get("magical_materials", 0)
             xp_gained = loot_data.get("xp", 0)
             biome = loot_data.get("biome", 'Wild')
+            player_levels_dict = loot_data.get("player_levels_dict")
+            if len(player_levels_dict) > 1:
+                char.delete_cvar("loot")
 
-            # Log the XP gain
-            xplib.modify_xp(xp_gained, f'+{xp_gained}XP gained from `{cmd}`-ing in The {biome}.')
+                # Calculate the total level of all players
+                total_level = sum(player_levels_dict.values())
 
-            # Clear the loot cvar after claiming the loot
-            char.delete_cvar("loot")
+                # Initialize a string to display XP distribution
+                xp_distribution_str = ":trophy: XP Distribution:\n"
 
-            # Provide a summary of the loot claimed
-            title = f'{char.name} claims their rewards!'
-            rewards_list = [
-                f":trophy: {xp_gained} XP" if xp_gained else None
-            ]
-            summary = "__Rewards claimed__:\n" + "\n".join([reward for reward in rewards_list if reward]) +f"""
+                # Calculate and append the proportional XP for each player to the string
+                for player_name, player_level in player_levels_dict.items():
+                    player_share = (player_level / total_level) * xp_gained if total_level else 0
+                    xp_distribution_str += f"- {player_name}: {int(player_share)} XP\n"
+
+                title = f'{char.name} concludes the combat!'
+                summary = f"\n{xp_distribution_str}"
+            else:
+
+                # Log the XP gain
+                xplib.modify_xp(xp_gained, f'+{xp_gained}XP gained from `{cmd}`-ing in The {biome}.')
+
+                # Clear the loot cvar after claiming the loot
+                char.delete_cvar("loot")
+
+                # Provide a summary of the loot claimed
+                title = f'{char.name} claims their rewards!'
+                rewards_list = [
+                    f":trophy: {xp_gained} XP" if xp_gained else None
+                ]
+                summary = "__Rewards claimed__:\n" + "\n".join([reward for reward in rewards_list if reward]) +f"""
 
 **Recommended Aliases:**
 - New XP: `{pref}xp` ([Workshop Link](https://avrae.io/dashboard/workshop/618b77bd5c51fd18fe5356a0))
@@ -268,13 +305,14 @@ def conclude_combat(combat):
 - `{pref}skin` (Use after battles)
 """
 
-            return title, summary
         else:
             title = f'{name} tries to claim their rewards!'
-            desc = f"No rewards to claim. {name} did not add their own discovered monsters to the encounter or has already claimed their rewards."
-            return title, desc
+            summary = f"No rewards to claim. {name} did not add their own discovered monsters to the encounter or has already claimed their rewards."
     else:
-        return f"Not all monsters are defeated!", f"**All potential rewards have been discarded.**\n\nPlease use `{pref}init end` to end combat."
+        title = f"Not all monsters are defeated!"
+        summary = f"Please claim rewards after defeating all monsters."
+    return title, summary
+
 
 def add_materials_to_cc(materials, magical_materials):
     # Add materials to character's material counter
@@ -316,7 +354,17 @@ def determine_challenge(player_level, input_difficulty=None):
     18: {"Easy": 2100, "Medium": 4200, "Hard": 6300, "Deadly": 9500},
     19: {"Easy": 2400, "Medium": 4900, "Hard": 7300, "Deadly": 10900},
     20: {"Easy": 2800, "Medium": 5700, "Hard": 8500, "Deadly": 12700}
-}
+    }
+    
+    if player_level > 20:
+        for level in range(21, 201):
+            base_value = 500 * (level - 20)  # Base calculation formula for difficulty levels
+            difficulty_levels[level] = {
+                "Easy": base_value,
+                "Medium": base_value * 2,
+                "Hard": base_value * 3,
+                "Deadly": base_value * 4.5
+            }
 
 
     # Map roll to difficulty
@@ -332,6 +380,18 @@ def determine_challenge(player_level, input_difficulty=None):
         chosen_difficulty = difficulty_list[difficulty_roll.total - 1]
 
     # Retrieve the XP value from the difficulty levels dictionary
-    xp_value = difficulty_levels[player_level][chosen_difficulty]
+    xp_value = int(difficulty_levels[player_level][chosen_difficulty])
 
     return difficulty_roll, chosen_difficulty, xp_value
+
+def is_number_or_comma_separated_numbers(s):
+    # Split the string by commas
+    elements = s.split(',')
+
+    # Check each element
+    for element in elements:
+        element = element.strip()  # Remove any leading/trailing whitespace
+        if not element.isdigit():  # Check if the element is a number
+            return False
+
+    return True
