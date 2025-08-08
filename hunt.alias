@@ -11,11 +11,13 @@ args = argparse(unparsed_arg)
 
 using(
 	calendar="74a21a79-bc4c-4b03-9b21-a16e2b591a89",
-	hunt="09fcbc10-6dc6-4918-825d-9aa20fdced3c"
+	hunt="09fcbc10-6dc6-4918-825d-9aa20fdced3c",
+	# hunt="1afe2711-d5ef-449f-b58d-2e3a91d1bcc2", #test gvar
 )
 
 biomes_list = [
 	'Arctic',
+	'Astral',
 	'Coastal',
 	'Swamp',
 	'Desert',
@@ -60,8 +62,9 @@ __**Available Locations**__:
 
 __**Available Difficulty Levels**__:
 {nl.join(difficulty_list)}
-'''
 
+:warning: *Selecting a difficulty level is optional. If not specified, it will be chosen randomly*.
+'''
 
 if inp in "help?":
 	title = f'{name} needs help hunting!'
@@ -102,7 +105,6 @@ elif inp1_title in biomes_list:
 		player_levels_dict = {player.name: player.levels.total_level for player in combatants if player.creature_type == None and player.monster_name == None}
 	if not player_levels_dict:
 		player_levels_dict = {name: level}
-		max_monsters = 4
 
 	if args.last('levels'):
 		player_levels_string = args.last('levels')
@@ -134,27 +136,27 @@ The above represents one player of level 3, another player of level 5 and the fi
 			return (f"""embed -title "{title}" -desc "{desc}" -thumb {image} -color {color} -footer '!{al} help | made by @alpha983'""")
 
 
-	level = sum(player_levels_dict.values())
-	# Count the number of players above level 7
-	players_above_level_7 = sum(1 for level in player_levels_dict.values() if level > 7)
+	# 2024 Update: Support party-based XP calculations
+	party_levels = list(player_levels_dict.values())
+	party_size = len(party_levels)
+	
+	# For compatibility, calculate total level for 2014 encounters
+	total_level = sum(party_levels)
 
-	# Calculate the base max_monsters
-	base_max_monsters = floor(len(player_levels_dict) * 1.5) if len(player_levels_dict) > 3 else 4
-
-	# Adjust max_monsters based on players above level 7
-	max_monsters = base_max_monsters + (3 * players_above_level_7)
-
+	max_monsters = roll('1d4') + randchoice([0,1])
 	input_difficulty = inp2.title() if inp2 in difficulty_list else None
-	difficulty_roll, chosen_difficulty, xp_value = hunt.determine_challenge(level, input_difficulty)
+	difficulty_roll, chosen_difficulty, xp_value = hunt.determine_challenge_party_aware(party_levels, input_difficulty)
 
-	suitable_monsters = hunt.find_monsters(monster_data, inp1_title, level, xp_value, is_daytime, max_monsters)
+	# Use highest level player for monster selection (compatibility with both systems)
+	highest_player_level = max(party_levels) if party_levels else total_level
+	suitable_monsters, multiplier = hunt.find_monsters(monster_data, inp1_title, highest_player_level, xp_value, is_daytime, max_monsters)
 	if not suitable_monsters:
 		title = f'No monsters found in this biome.'
 		desc = f'Please try again later.'
 		return (f"""embed -title "{title}" -desc "{desc}" -thumb {image} -color {color} -footer '!{al} help | made by @alpha983'""")
 
 
-	title, desc = hunt.format_encounter_details(suitable_monsters, inp1_title, difficulty_roll, chosen_difficulty, xp_value, player_levels_dict)
+	title, desc = hunt.format_encounter_details(suitable_monsters, inp1_title, difficulty_roll, chosen_difficulty, xp_value, player_levels_dict, multiplier)
 
 	# Step 1: Aggregate Monster Quantities
 	monster_quantities = {}
@@ -184,16 +186,18 @@ The above represents one player of level 3, another player of level 5 and the fi
 		'''
 		return (f"""embed -title "{title}" -desc "{desc}" -thumb {image} -color {color} -footer '!{al} help | made by @alpha983'""")
 	else:
-
 		l1 = f'embed -title "{title}" -desc "'+desc+f'" -thumb {image} -color {color} -footer "!{al} help | made by @alpha983"'
 		auto_helper_title = f"Recommended Action: Use `{pref}auto` for Monster AI"
 		auto_helper_desc = f"""`{pref}auto`
 
-	If you haven\'t enabled `{pref}auto` yet, click the below link to visit the workshop page:
-	[🤖 Auto Monster AI](https://avrae.io/dashboard/workshop/617805d1137cd863517bc42c)
-	(Please ignore if a Game Master is available to run combat)
+If you haven\'t enabled `{pref}auto` yet, click the below link to visit the workshop page:
+[🤖 Auto Monster AI](https://avrae.io/dashboard/workshop/617805d1137cd863517bc42c)
+(Please ignore if a Game Master is available to run combat)
 
-	:warning: IMPORTANT: After defeating all monsters, use `{cmd} end` to automatically add the XP you've earned from the combat."""
+To disable this reminder AND to disable auto addition of monsters to combat initiative:
+`{cmd} auto off`
+
+:warning: IMPORTANT: After defeating all monsters, use `{cmd} end` to automatically add the XP you've earned from the combat."""
 
 		l4 = f'!embed -title "{auto_helper_title}" -desc "'+auto_helper_desc+f'" -color {color} -footer "!{al} help | made by @alpha983"'
 		if c:
