@@ -210,6 +210,38 @@ The above represents one player of level 3, another player of level 5 and the fi
 	# Use highest level player for monster selection (compatibility with both systems)
 	highest_player_level = max(party_levels) if party_levels else total_level
 	suitable_monsters, multiplier = hunt.find_monsters(monster_data, inp1_title, highest_player_level, xp_value, is_daytime, max_monsters, party_size)
+
+	# Prevent repeated encounters - compare with last 10 hunts stored in cvar
+	# Build signature: count each monster type for order-independent comparison
+	sig_counts = {}
+	for m in suitable_monsters:
+		sig_counts[m[0]] = sig_counts.get(m[0], 0) + 1
+	encounter_sig = '|'.join([f"{k}:{v}" for k, v in sig_counts.items()]) if suitable_monsters else ''
+
+	# Get last 10 encounters as list
+	last_encounters_raw = get('hunt_history', '')
+	last_encounters = last_encounters_raw.split(';;') if last_encounters_raw else []
+
+	# Retry with different monster counts if encounter was recent
+	retry_count = 0
+	max_retries = 5
+	while encounter_sig and encounter_sig in last_encounters and retry_count < max_retries:
+		retry_count += 1
+		max_monsters = roll('1d4') + randchoice([0, 1, 2])
+		suitable_monsters, multiplier = hunt.find_monsters(monster_data, inp1_title, highest_player_level, xp_value, is_daytime, max_monsters, party_size)
+		if suitable_monsters:
+			sig_counts = {}
+			for m in suitable_monsters:
+				sig_counts[m[0]] = sig_counts.get(m[0], 0) + 1
+			encounter_sig = '|'.join([f"{k}:{v}" for k, v in sig_counts.items()])
+
+	# Store encounter in history (keep last 10)
+	if suitable_monsters:
+		last_encounters.append(encounter_sig)
+		if len(last_encounters) > 10:
+			last_encounters = last_encounters[-10:]
+		character().set_cvar('hunt_history', ';;'.join(last_encounters))
+
 	if not suitable_monsters:
 		title = f'No monsters found in this biome.'
 		desc = f'Please try again later.'
